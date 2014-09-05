@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,6 +50,19 @@
 
 #define CPP_CMD_TIMEOUT_MS 300
 #define MSM_MICRO_IFACE_CLK_IDX 7
+
+#define MSM_CPP_NOMINAL_CLOCK 266670000
+#define MSM_CPP_TURBO_CLOCK 320000000
+
+#define CPP_FW_VERSION_1_2_0	0x10020000
+#define CPP_FW_VERSION_1_4_0	0x10040000
+#define CPP_FW_VERSION_1_6_0	0x10060000
+#define CPP_FW_VERSION_1_8_0	0x10080000
+
+/* stripe information offsets in frame command */
+#define STRIPE_BASE_FW_1_2_0	130
+#define STRIPE_BASE_FW_1_4_0	140
+#define STRIPE_BASE_FW_1_6_0	464
 
 struct msm_cpp_timer_data_t {
 	struct cpp_device *cpp_dev;
@@ -827,7 +840,10 @@ static void cpp_load_fw(struct cpp_device *cpp_dev, char *fw_name_bin)
 
 		/*Start firmware loading*/
 		msm_cpp_write(MSM_CPP_CMD_FW_LOAD, cpp_dev->base);
-		msm_cpp_write(fw->size, cpp_dev->base);
+		if (fw)
+			msm_cpp_write(fw->size, cpp_dev->base);
+		else
+			msm_cpp_write(MSM_CPP_END_ADDRESS, cpp_dev->base);
 		msm_cpp_write(MSM_CPP_START_ADDRESS, cpp_dev->base);
 
 		if (ptr_bin) {
@@ -1042,15 +1058,15 @@ static int msm_cpp_buffer_ops(struct cpp_device *cpp_dev,
 static int msm_cpp_notify_frame_done(struct cpp_device *cpp_dev)
 {
 	struct v4l2_event v4l2_evt;
-	struct msm_queue_cmd *frame_qcmd;
-	struct msm_queue_cmd *event_qcmd;
+	struct msm_queue_cmd *frame_qcmd = NULL;
+	struct msm_queue_cmd *event_qcmd = NULL;
 	struct msm_cpp_frame_info_t *processed_frame;
 	struct msm_device_queue *queue = &cpp_dev->processing_q;
 	struct msm_buf_mngr_info buff_mgr_info;
 	int rc = 0;
 
-	if (queue->len > 0) {
-		frame_qcmd = msm_dequeue(queue, list_frame);
+	frame_qcmd = msm_dequeue(queue, list_frame);
+	if (frame_qcmd) {
 		processed_frame = frame_qcmd->command;
 		do_gettimeofday(&(processed_frame->out_time));
 		kfree(frame_qcmd);
@@ -1162,9 +1178,6 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 	}
 
 	this_frame = cpp_timer.data.processed_frame;
-	pr_err("ReInstalling cpp_timer\n");
-	setup_timer(&cpp_timer.cpp_timer, cpp_timer_callback,
-		(unsigned long)&cpp_timer);
 	pr_err("Starting timer to fire in %d ms. (jiffies=%lu)\n",
 		CPP_CMD_TIMEOUT_MS, jiffies);
 	ret = mod_timer(&cpp_timer.cpp_timer,
@@ -1257,9 +1270,8 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 	struct msm_cpp_frame_info_t *u_frame_info =
 		(struct msm_cpp_frame_info_t *)ioctl_ptr->ioctl_ptr;
 	int32_t status = 0;
-	uint8_t fw_version_1_2_x = 0;
 	int in_fd;
-
+	int32_t stripe_base = 0;
 	int i = 0;
 	if (!new_frame) {
 		pr_err("Insufficient memory. return\n");
@@ -1300,7 +1312,16 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 	}
 
 	new_frame->cpp_cmd_msg = cpp_frame_msg;
-
+	if (cpp_frame_msg == NULL ||
+		(new_frame->msg_len < MSM_CPP_MIN_FRAME_LENGTH)) {
+		pr_err("%s %d Length is not correct or frame message is missing\n",
+			__func__, __LINE__);
+		return -EINVAL;
+	}
+	if (cpp_frame_msg[new_frame->msg_len - 1] != MSM_CPP_MSG_ID_TRAILER) {
+		pr_err("%s %d Invalid frame message\n", __func__, __LINE__);
+		return -EINVAL;
+	}
 	in_phyaddr = msm_cpp_fetch_buffer_info(cpp_dev,
 		&new_frame->input_buffer_info,
 		((new_frame->input_buffer_info.identity >> 16) & 0xFFFF),
@@ -1374,22 +1395,36 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 		((cpp_frame_msg[12] >> 10) & 0x3FF) +
 		(cpp_frame_msg[12] & 0x3FF);
 
-	fw_version_1_2_x = 0;
-	if ((cpp_dev->hw_info.cpp_hw_version == CPP_HW_VERSION_1_1_0) ||
-		(cpp_dev->hw_info.cpp_hw_version == CPP_HW_VERSION_1_1_1) ||
-		(cpp_dev->hw_info.cpp_hw_version == CPP_HW_VERSION_2_0_0))
-		fw_version_1_2_x = 2;
+	if ((cpp_dev->fw_version & 0xffff0000) ==
+		CPP_FW_VERSION_1_2_0) {
+		stripe_base = STRIPE_BASE_FW_1_2_0;
+	} else if ((cpp_dev->fw_version & 0xffff0000) ==
+		CPP_FW_VERSION_1_4_0) {
+		stripe_base = STRIPE_BASE_FW_1_4_0;
+	} else if ((cpp_dev->fw_version & 0xffff0000) ==
+		CPP_FW_VERSION_1_6_0) {
+		stripe_base = STRIPE_BASE_FW_1_6_0;
+	} else {
+		pr_err("invalid fw version %08x", cpp_dev->fw_version);
+	}
+
+	if ((stripe_base + num_stripes*27 + 1) != new_frame->msg_len) {
+		pr_err("Invalid frame message\n");
+		rc = -EINVAL;
+		goto ERROR3;
+	}
+
 
 	for (i = 0; i < num_stripes; i++) {
-		cpp_frame_msg[(133 + fw_version_1_2_x) + i * 27] +=
+		cpp_frame_msg[stripe_base + 5 + i*27] +=
 			(uint32_t) in_phyaddr;
-		cpp_frame_msg[(139 + fw_version_1_2_x) + i * 27] +=
+		cpp_frame_msg[stripe_base + 11 + i * 27] +=
 			(uint32_t) out_phyaddr0;
-		cpp_frame_msg[(140 + fw_version_1_2_x) + i * 27] +=
+		cpp_frame_msg[stripe_base + 12 + i * 27] +=
 			(uint32_t) out_phyaddr1;
-		cpp_frame_msg[(141 + fw_version_1_2_x) + i * 27] +=
+		cpp_frame_msg[stripe_base + 13 + i * 27] +=
 			(uint32_t) out_phyaddr0;
-		cpp_frame_msg[(142 + fw_version_1_2_x) + i * 27] +=
+		cpp_frame_msg[stripe_base + 14 + i * 27] +=
 			(uint32_t) out_phyaddr1;
 	}
 
@@ -1513,6 +1548,7 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 	case VIDIOC_MSM_CPP_FLUSH_QUEUE:
 		rc = msm_cpp_flush_frames(cpp_dev);
 		break;
+	case VIDIOC_MSM_CPP_APPEND_STREAM_BUFF_INFO:
 	case VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO: {
 		struct msm_cpp_stream_buff_info_t *u_stream_buff_info;
 		struct msm_cpp_stream_buff_info_t k_stream_buff_info;
@@ -1580,9 +1616,12 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 			return -EINVAL;
 		}
 
-		rc = msm_cpp_add_buff_queue_entry(cpp_dev,
-			((k_stream_buff_info.identity >> 16) & 0xFFFF),
-			(k_stream_buff_info.identity & 0xFFFF));
+		if (cmd != VIDIOC_MSM_CPP_APPEND_STREAM_BUFF_INFO) {
+			rc = msm_cpp_add_buff_queue_entry(cpp_dev,
+				((k_stream_buff_info.identity >> 16) & 0xFFFF),
+				(k_stream_buff_info.identity & 0xFFFF));
+		}
+
 		if (!rc)
 			rc = msm_cpp_enqueue_buff_info_list(cpp_dev,
 				&k_stream_buff_info);
@@ -1628,18 +1667,23 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 		struct msm_queue_cmd *event_qcmd;
 		struct msm_cpp_frame_info_t *process_frame;
 		event_qcmd = msm_dequeue(queue, list_eventdata);
-		process_frame = event_qcmd->command;
-		CPP_DBG("fid %d\n", process_frame->frame_id);
-		if (copy_to_user((void __user *)ioctl_ptr->ioctl_ptr,
-				process_frame,
-				sizeof(struct msm_cpp_frame_info_t))) {
-					mutex_unlock(&cpp_dev->mutex);
-					return -EINVAL;
-		}
+		if(event_qcmd) {
+			process_frame = event_qcmd->command;
+			CPP_DBG("fid %d\n", process_frame->frame_id);
+			if (copy_to_user((void __user *)ioctl_ptr->ioctl_ptr,
+					process_frame,
+					sizeof(struct msm_cpp_frame_info_t))) {
+						mutex_unlock(&cpp_dev->mutex);
+						return -EINVAL;
+			}
 
-		kfree(process_frame->cpp_cmd_msg);
-		kfree(process_frame);
-		kfree(event_qcmd);
+			kfree(process_frame->cpp_cmd_msg);
+			kfree(process_frame);
+			kfree(event_qcmd);
+		} else {
+			pr_err("Empty command list\n");
+			return -EFAULT;
+		}
 		break;
 	}
 	case MSM_SD_SHUTDOWN: {
@@ -1914,6 +1958,7 @@ static int __devinit cpp_probe(struct platform_device *pdev)
 		rc = -ENOMEM;
 		goto ERROR3;
 	}
+
 	INIT_WORK((struct work_struct *)cpp_dev->work, msm_cpp_do_timeout_work);
 	cpp_dev->cpp_open_cnt = 0;
 	cpp_dev->is_firmware_loaded = 0;

@@ -40,6 +40,16 @@ struct connection *connection_new(void)
 	return conn;
 }
 
+struct connection *connection_create(int socket_descriptor, pid_t dest)
+{
+	struct connection *conn = connection_new();
+	if (conn == NULL)
+		return NULL;
+
+	conn->peer_pid = dest;
+	return conn;
+}
+
 void connection_cleanup(struct connection *conn)
 {
 	if (!conn)

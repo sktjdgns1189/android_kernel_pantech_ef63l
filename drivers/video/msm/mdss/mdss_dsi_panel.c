@@ -389,7 +389,46 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
 #endif
-void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
+
+static int mdss_dsi_request_gpios(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
+{
+	int rc = 0;
+
+	if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
+		rc = gpio_request(ctrl_pdata->disp_en_gpio,
+						"disp_enable");
+		if (rc) {
+			pr_err("request disp_en gpio failed, rc=%d\n",
+				       rc);
+			goto disp_en_gpio_err;
+		}
+	}
+	rc = gpio_request(ctrl_pdata->rst_gpio, "disp_rst_n");
+	if (rc) {
+		pr_err("request reset gpio failed, rc=%d\n",
+			rc);
+		goto rst_gpio_err;
+	}
+	if (gpio_is_valid(ctrl_pdata->mode_gpio)) {
+		rc = gpio_request(ctrl_pdata->mode_gpio, "panel_mode");
+		if (rc) {
+			pr_err("request panel mode gpio failed,rc=%d\n",
+								rc);
+			goto mode_gpio_err;
+		}
+	}
+	return rc;
+
+mode_gpio_err:
+	gpio_free(ctrl_pdata->rst_gpio);
+rst_gpio_err:
+	if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
+		gpio_free(ctrl_pdata->disp_en_gpio);
+disp_en_gpio_err:
+	return rc;
+}
+
+int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 {
 #if defined (CONFIG_F_SKYDISP_EF56_SS) || defined (CONFIG_F_SKYDISP_EF59_SS) ||defined (CONFIG_F_SKYDISP_EF60_SS) ||(defined (CONFIG_F_SKYDISP_EF63_SS) && (CONFIG_BOARD_VER <= CONFIG_PT20)) 
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
@@ -397,7 +436,7 @@ void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
-		return;
+		return -EINVAL;
 	}
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
@@ -411,12 +450,12 @@ void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 	if (!gpio_is_valid(ctrl_pdata->rst_gpio)) {
 		pr_debug("%s:%d, reset line not configured\n",
 			   __func__, __LINE__);
-		return;
+		return rc;
 	}
 	if (!gpio_is_valid(ctrl_pdata->lcd_vcip_reg_en_gpio)) {
 		pr_debug("%s:%d, lcd vcip line not configured\n",
 			   __func__, __LINE__);
-		return;
+		return rc;
 	}
 	pr_debug("%s: enable = %d\n", __func__, enable);
 	pinfo = &(ctrl_pdata->panel_data.panel_info);
@@ -496,11 +535,11 @@ void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 #else  //QUALCOMM default
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_panel_info *pinfo = NULL;
-	int i;
+	int i, rc = 0;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
-		return;
+		return -EINVAL;
 	}
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
@@ -1231,6 +1270,18 @@ void mtp_read_work(struct work_struct *work)
 #if defined (CONFIG_F_SKYDISP_EF56_SS) || defined (CONFIG_F_SKYDISP_EF59_SS) || defined (CONFIG_F_SKYDISP_EF60_SS)
 bool first_enable = false;
 #endif
+
+static struct mdss_dsi_ctrl_pdata *get_rctrl_data(struct mdss_panel_data *pdata)
+{
+	if (!pdata || !pdata->next) {
+		pr_err("%s: Invalid panel data\n", __func__);
+		return NULL;
+	}
+
+	return container_of(pdata->next, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+}
+
 static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 							u32 bl_level)
 {
@@ -1290,6 +1341,16 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		msleep(2);
 #endif
 		mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+		if (ctrl_pdata->shared_pdata.broadcast_enable &&
+				ctrl_pdata->ndx == DSI_CTRL_0) {
+			struct mdss_dsi_ctrl_pdata *rctrl_pdata = NULL;
+			rctrl_pdata = get_rctrl_data(pdata);
+			if (!rctrl_pdata) {
+				pr_err("%s: Right ctrl data NULL\n", __func__);
+				return;
+			}
+			mdss_dsi_panel_bklt_dcs(rctrl_pdata, bl_level);
+		}
 #if defined (CONFIG_F_SKYDISP_EF56_SS) || defined (CONFIG_F_SKYDISP_EF59_SS) || defined (CONFIG_F_SKYDISP_EF60_SS)
 		msleep(1);
 		mdss_set_tx_power_mode(1 , pdata);

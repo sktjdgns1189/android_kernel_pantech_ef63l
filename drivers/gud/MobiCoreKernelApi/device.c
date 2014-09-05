@@ -18,7 +18,8 @@
 #include "device.h"
 #include "common.h"
 
-static struct wsm *wsm_create(void *virt_addr, uint32_t len, uint32_t handle)
+struct wsm *wsm_create(void *virt_addr, uint32_t len, uint32_t handle,
+		       void *phys_addr)
 {
 	struct wsm *wsm;
 
@@ -30,6 +31,7 @@ static struct wsm *wsm_create(void *virt_addr, uint32_t len, uint32_t handle)
 	wsm->virt_addr = virt_addr;
 	wsm->len = len;
 	wsm->handle = handle;
+	wsm->phys_addr = phys_addr;
 	return wsm;
 }
 
@@ -47,7 +49,7 @@ struct mcore_device_t *mcore_device_create(uint32_t device_id,
 	dev->connection = connection;
 
 	INIT_LIST_HEAD(&dev->session_vector);
-	INIT_LIST_HEAD(&dev->wsm_mmu_vector);
+	INIT_LIST_HEAD(&dev->wsm_l2_vector);
 
 	return dev;
 }
@@ -69,7 +71,7 @@ void mcore_device_cleanup(struct mcore_device_t *dev)
 	}
 
 	/* Free all allocated WSM descriptors */
-	list_for_each_safe(pos, q, &dev->wsm_mmu_vector) {
+	list_for_each_safe(pos, q, &dev->wsm_l2_vector) {
 		wsm = list_entry(pos, struct wsm, list);
 		list_del(pos);
 		kfree(wsm);
@@ -80,7 +82,7 @@ void mcore_device_cleanup(struct mcore_device_t *dev)
 	kfree(dev);
 }
 
-bool mcore_device_open(struct mcore_device_t *dev, const char *device_name)
+bool mcore_device_open(struct mcore_device_t *dev, const char *deviceName)
 {
 	dev->instance = mobicore_open();
 	return (dev->instance != NULL);
@@ -162,19 +164,20 @@ struct wsm *mcore_device_allocate_contiguous_wsm(struct mcore_device_t *dev,
 		/* Allocate shared memory */
 		void *virt_addr;
 		uint32_t handle;
+		void *phys_addr;
 		int ret = mobicore_allocate_wsm(dev->instance, len, &handle,
-						&virt_addr);
+						&virt_addr, &phys_addr);
 		if (ret != 0)
 			break;
 
-		/* Register (vaddr) with device */
-		wsm = wsm_create(virt_addr, len, handle);
+		/* Register (vaddr,paddr) with device */
+		wsm = wsm_create(virt_addr, len, handle, phys_addr);
 		if (wsm == NULL) {
 			mobicore_free_wsm(dev->instance, handle);
 			break;
 		}
 
-		list_add_tail(&(wsm->list), &(dev->wsm_mmu_vector));
+		list_add_tail(&(wsm->list), &(dev->wsm_l2_vector));
 
 	} while (0);
 
@@ -188,7 +191,7 @@ bool mcore_device_free_contiguous_wsm(struct mcore_device_t *dev,
 	struct wsm *tmp;
 	struct list_head *pos;
 
-	list_for_each(pos, &dev->wsm_mmu_vector) {
+	list_for_each(pos, &dev->wsm_l2_vector) {
 		tmp = list_entry(pos, struct wsm, list);
 		if (tmp == wsm) {
 			ret = true;
@@ -216,7 +219,7 @@ struct wsm *mcore_device_find_contiguous_wsm(struct mcore_device_t *dev,
 	struct wsm *wsm;
 	struct list_head *pos;
 
-	list_for_each(pos, &dev->wsm_mmu_vector) {
+	list_for_each(pos, &dev->wsm_l2_vector) {
 		wsm = list_entry(pos, struct wsm, list);
 		if (virt_addr == wsm->virt_addr)
 			return wsm;

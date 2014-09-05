@@ -13,7 +13,8 @@
 
 #define MAX_NUM_CPP_STRIPS 8
 #define MSM_CPP_MAX_NUM_PLANES 3
-#define MSM_CPP_MAX_FRAME_LENGTH 1024
+#define MSM_CPP_MIN_FRAME_LENGTH 13
+#define MSM_CPP_MAX_FRAME_LENGTH 2048
 #define MSM_CPP_MAX_FW_NAME_LEN 32
 
 enum msm_cpp_frame_type {
@@ -228,6 +229,9 @@ struct msm_pproc_queue_buf_info {
 
 #define VIDIOC_MSM_CPP_QUEUE_BUF \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 14, struct msm_camera_v4l2_ioctl_t)
+
+#define VIDIOC_MSM_CPP_APPEND_STREAM_BUFF_INFO \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 15, struct msm_camera_v4l2_ioctl_t)
 
 #define V4L2_EVENT_CPP_FRAME_DONE  (V4L2_EVENT_PRIVATE_START + 0)
 #define V4L2_EVENT_VPE_FRAME_DONE  (V4L2_EVENT_PRIVATE_START + 1)

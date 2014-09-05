@@ -181,6 +181,10 @@ static int msm_compr_set_volume(struct snd_compr_stream *cstream,
 
 	pr_debug("%s: volume_l %d volume_r %d\n",
 		__func__, volume_l, volume_r);
+	if (!cstream || !cstream->runtime) {
+		pr_err("%s: session not active\n", __func__);
+		return -EPERM;
+	}
 	prtd = cstream->runtime->private_data;
 	if (prtd && prtd->audio_client) {
 		if (volume_l != volume_r) {
@@ -492,7 +496,7 @@ static void populate_codec_list(struct msm_compr_audio *prtd)
 #ifdef CONFIG_PANTECH_SND_FLAC //20131223 jhsong : qct patch for 24bit pcm on offload
 	prtd->compr_cap.num_codecs = 5;
 #else
-	prtd->compr_cap.num_codecs = 4;
+	prtd->compr_cap.num_codecs = 5;
 #endif
 	prtd->compr_cap.codecs[0] = SND_AUDIOCODEC_MP3;
 	prtd->compr_cap.codecs[1] = SND_AUDIOCODEC_AAC;
@@ -518,6 +522,10 @@ static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
 	case FORMAT_MPEG4_AAC:
 		memset(&aac_cfg, 0x0, sizeof(struct asm_aac_cfg));
 		aac_cfg.aot = AAC_ENC_MODE_EAAC_P;
+		if (prtd->codec_param.codec.format ==
+					SND_AUDIOSTREAMFORMAT_MP4ADTS)
+			aac_cfg.format = 0x0;
+		else
 		aac_cfg.format = 0x03;
 		aac_cfg.ch_cfg = prtd->num_channels;
 		aac_cfg.sample_rate = prtd->sample_rate;
@@ -674,6 +682,17 @@ static int msm_compr_open(struct snd_compr_stream *cstream)
 		 kzalloc(sizeof(struct msm_compr_audio_effects), GFP_KERNEL);
 	if (!pdata->audio_effects[rtd->dai_link->be_id]) {
 		pr_err("%s: Could not allocate memory for effects\n", __func__);
+		pdata->cstream[rtd->dai_link->be_id] = NULL;
+		kfree(prtd);
+		return -ENOMEM;
+	}
+	pdata->dec_params[rtd->dai_link->be_id] =
+		 kzalloc(sizeof(struct msm_compr_dec_params), GFP_KERNEL);
+	if (!pdata->dec_params[rtd->dai_link->be_id]) {
+		pr_err("%s: Could not allocate memory for dec params\n",
+			__func__);
+		kfree(pdata->audio_effects[rtd->dai_link->be_id]);
+		pdata->cstream[rtd->dai_link->be_id] = NULL;
 		kfree(prtd);
 		return -ENOMEM;
 	}
@@ -691,6 +710,7 @@ static int msm_compr_open(struct snd_compr_stream *cstream)
 		pr_err("%s: Could not allocate memory for client\n", __func__);
 		kfree(pdata->audio_effects[rtd->dai_link->be_id]);
 		kfree(pdata->dec_params[rtd->dai_link->be_id]);
+		pdata->cstream[rtd->dai_link->be_id] = NULL;
 		kfree(prtd);
 		return -ENOMEM;
 	}

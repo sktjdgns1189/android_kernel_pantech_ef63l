@@ -2004,11 +2004,22 @@ static int msm_spi_transfer_one_message(struct spi_master *master, struct spi_me
 	if (dd->use_rlock)
 		remote_mutex_lock(&dd->r_lock);
 
+	spin_lock_irqsave(&dd->queue_lock, flags);
+	dd->transfer_pending = 1;
+	spin_unlock_irqrestore(&dd->queue_lock, flags);
+
 	if (dd->suspended || !msm_spi_is_valid_state(dd)) {
 		dev_err(dd->dev, "%s: SPI operational state not valid\n",
 			__func__);
 		status_error = 1;
 	}
+	spin_lock_irqsave(&dd->queue_lock, flags);
+
+	while (!list_empty(&dd->queue)) {
+		dd->cur_msg = list_entry(dd->queue.next,
+					 struct spi_message, queue);
+		list_del_init(&dd->cur_msg->queue);
+		spin_unlock_irqrestore(&dd->queue_lock, flags);
 
 		if (status_error)
 			dd->cur_msg->status = -EIO;

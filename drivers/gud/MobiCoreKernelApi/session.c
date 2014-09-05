@@ -14,7 +14,7 @@
 #include "session.h"
 
 struct bulk_buffer_descriptor *bulk_buffer_descriptor_create(
-	void *virt_addr, uint32_t len, uint32_t handle)
+	void *virt_addr, uint32_t len, uint32_t handle, void *phys_addr_wsm_l2)
 {
 	struct bulk_buffer_descriptor *desc;
 
@@ -26,6 +26,7 @@ struct bulk_buffer_descriptor *bulk_buffer_descriptor_create(
 	desc->virt_addr = virt_addr;
 	desc->len = len;
 	desc->handle = handle;
+	desc->phys_addr_wsm_l2 = phys_addr_wsm_l2;
 
 	return desc;
 }
@@ -54,14 +55,19 @@ void session_cleanup(struct session *session)
 {
 	struct bulk_buffer_descriptor *bulk_buf_descr;
 	struct list_head *pos, *q;
+	unsigned int phys_addr_wsm_l2;
 
 	/* Unmap still mapped buffers */
 	list_for_each_safe(pos, q, &session->bulk_buffer_descriptors) {
 		bulk_buf_descr =
 			list_entry(pos, struct bulk_buffer_descriptor, list);
 
+		phys_addr_wsm_l2 =
+			(unsigned int)bulk_buf_descr->phys_addr_wsm_l2;
+
 		MCDRV_DBG_VERBOSE(mc_kapi,
-				  "handle= %d",
+				  "Phys Addr of L2 Table = 0x%X, handle= %d",
+				  phys_addr_wsm_l2,
 				  bulk_buf_descr->handle);
 
 		/* ignore any error, as we cannot do anything in this case. */
@@ -112,10 +118,11 @@ struct bulk_buffer_descriptor *session_add_bulk_buf(struct session *session,
 		 * Prepare the interface structure for memory registration in
 		 * Kernel Module
 		 */
+		uint32_t l2_table_phys;
 		uint32_t handle;
 
 		int ret = mobicore_map_vmem(session->instance, buf, len,
-					    &handle);
+					    &handle, &l2_table_phys);
 
 		if (ret != 0) {
 			MCDRV_DBG_ERROR(mc_kapi,
@@ -124,11 +131,15 @@ struct bulk_buffer_descriptor *session_add_bulk_buf(struct session *session,
 			break;
 		}
 
-		MCDRV_DBG_VERBOSE(mc_kapi, "handle=%d", handle);
+		MCDRV_DBG_VERBOSE(mc_kapi,
+				  "Phys Addr of L2 Table = 0x%X, handle=%d",
+				  (unsigned int)l2_table_phys, handle);
 
 		/* Create new descriptor */
 		bulk_buf_descr =
-			bulk_buffer_descriptor_create(buf, len, handle);
+			bulk_buffer_descriptor_create(buf, len,
+						      handle,
+						      (void *)l2_table_phys);
 		if (bulk_buf_descr == NULL) {
 			mobicore_unmap_vmem(session->instance, handle);
 			break;
@@ -166,7 +177,8 @@ bool session_remove_bulk_buf(struct session *session, void *virt_addr)
 		MCDRV_DBG_ERROR(mc_kapi, "Virtual Address not found");
 		ret = false;
 	} else {
-		MCDRV_DBG_VERBOSE(mc_kapi, "Wsm handle=%d",
+		MCDRV_DBG_VERBOSE(mc_kapi, "WsmL2 phys=0x%X, handle=%d",
+				  (unsigned int)bulk_buf->phys_addr_wsm_l2,
 				  bulk_buf->handle);
 
 		/* ignore any error, as we cannot do anything */

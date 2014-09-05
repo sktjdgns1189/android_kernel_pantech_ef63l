@@ -43,17 +43,6 @@
 #include "pm-boot.h"
 #include "clock.h"
 
-#if defined(CONFIG_CHECK_HWREV_FOR_CHANGING_PROXIMITY_THRESHOLD)
-#include <linux/proc_fs.h>
-#include <mach/msm_smem.h>
-#endif
-
-#if defined(CONFIG_PANTECH_DEBUG)
-#if defined(CONFIG_PANTECH_DEBUG_SCHED_LOG)
-#include <mach/pantech_debug.h> //p14291_pantech_dbg
-#endif
-#endif
-
 #define CREATE_TRACE_POINTS
 #include <mach/trace_msm_low_power.h>
 
@@ -66,10 +55,6 @@
 #define SCLK_HZ (32768)
 
 #define MAX_BUF_SIZE  512
-
-#if defined(CONFIG_CHECK_HWREV_FOR_CHANGING_PROXIMITY_THRESHOLD)
-static void save_hwrev_forSensor_toProcfs(void);
-#endif
 
 static int msm_pm_debug_mask = 1;
 module_param_named(
@@ -476,8 +461,8 @@ static inline void msm_pc_inc_debug_count(uint32_t cpu,
 	if (!msm_pc_debug_counters)
 		return;
 
-	cnt = readl_relaxed(msm_pc_debug_counters + cpu * 4 + offset * 4);
-	writel_relaxed(++cnt, msm_pc_debug_counters + cpu * 4 + offset * 4);
+	cnt = readl_relaxed(msm_pc_debug_counters + cpu * 4 * MSM_PC_NUM_COUNTERS + offset * 4);
+	writel_relaxed(++cnt, msm_pc_debug_counters + cpu * 4 * MSM_PC_NUM_COUNTERS + offset * 4);
 	mb();
 }
 
@@ -826,17 +811,19 @@ int msm_cpu_pm_enter_sleep(enum msm_pm_sleep_mode mode, bool from_idle)
 		pr_info("CPU%u: %s mode:%d\n",
 			smp_processor_id(), __func__, mode);
 
-	time = sched_clock();
+	if (from_idle)
+		time = sched_clock();
+
 	if (execute[mode])
 		exit_stat = execute[mode](from_idle);
-	time = sched_clock() - time;
-	if (from_idle)
+
+	if (from_idle) {
+		time = sched_clock() - time;
 		msm_pm_ftrace_lpm_exit(smp_processor_id(), mode, collapsed);
-	else
-		exit_stat = MSM_PM_STAT_SUSPEND;
-	if (exit_stat >= 0)
-		msm_pm_add_stat(exit_stat, time);
-	do_div(time, 1000);
+		if (exit_stat >= 0)
+			msm_pm_add_stat(exit_stat, time);
+	}
+
 	return collapsed;
 }
 
