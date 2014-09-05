@@ -137,13 +137,7 @@ error:
 			mdss_dsi_panel_reset(pdata, 1);
 
 	} else {
-
-		ret = mdss_dsi_panel_reset(pdata, 0);
-		if (ret) {
-			pr_err("%s: Panel reset failed. rc=%d\n",
-					__func__, ret);
-			goto error;
-		}
+		mdss_dsi_panel_reset(pdata, 0);
 
 		gpio_set_value((ctrl_pdata->octa_vci_reg_en_gpio), 0);
 	       msleep(10);
@@ -490,14 +484,9 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		return ret;
 	}
 
-	if (!pdata->panel_info.mipi.lp11_init) {
-		ret = mdss_dsi_panel_reset(pdata, 1);
-		if (ret) {
-			pr_err("%s: Panel reset failed. rc=%d\n",
-					__func__, ret);
-			return ret;
-		}
-	}
+	if (!pdata->panel_info.mipi.lp11_init)
+		mdss_dsi_panel_reset(pdata, 1);
+
 	ret = mdss_dsi_bus_clk_start(ctrl_pdata);
 	if (ret) {
 		pr_err("%s: failed to enable bus clocks. rc=%d\n", __func__,
@@ -594,14 +583,9 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 	 * Issue hardware reset line after enabling the DSI clocks and data
 	 * data lanes for LP11 init
 	 */
-	if (pdata->panel_info.mipi.lp11_init) {
-		ret = mdss_dsi_panel_reset(pdata, 1);
-		if (ret) {
-			pr_err("%s: Panel reset failed. rc=%d\n",
-					__func__, ret);
-			return ret;
-		}
-	}
+	if (pdata->panel_info.mipi.lp11_init)
+		mdss_dsi_panel_reset(pdata, 1);
+
 	if (pdata->panel_info.mipi.init_delay)
 		usleep(pdata->panel_info.mipi.init_delay);
 

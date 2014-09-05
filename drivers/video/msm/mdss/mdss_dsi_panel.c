@@ -428,7 +428,7 @@ disp_en_gpio_err:
 	return rc;
 }
 
-int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
+void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 {
 #if defined (CONFIG_F_SKYDISP_EF56_SS) || defined (CONFIG_F_SKYDISP_EF59_SS) ||defined (CONFIG_F_SKYDISP_EF60_SS) ||(defined (CONFIG_F_SKYDISP_EF63_SS) && (CONFIG_BOARD_VER <= CONFIG_PT20)) 
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
